@@ -1,8 +1,5 @@
 node_modules
 .env
 .DS_Store
-<<<<<<< HEAD
-db-backup.json
 data/db.json
-=======
->>>>>>> 74821b6dc69d0ba12324afa2bcc1f901baa26b55
+db-backup.json
