@@ -21,10 +21,8 @@ export const PORT = isProd && env.PORT ? Number(env.PORT) : 3000;
 const JWT_SECRET = env.JWT_SECRET || 'studiospace-super-secure-jwt-secret-key-2026';
 if (isProd && !env.JWT_SECRET) console.warn('WARNING: JWT_SECRET is not set. Add it to your environment variables.');
 
-// Emails (comma-separated) allowed to edit/delete any studio, e.g. ADMIN_EMAILS=me@gmail.com
 const ADMIN_EMAILS = (env.ADMIN_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
 
-// Uploaded images live in /tmp on Vercel (read-only filesystem), otherwise in public/uploads.
 const UPLOADS_DIR = env.VERCEL
   ? '/tmp/uploads'
   : env.UPLOADS_DIR
@@ -34,15 +32,13 @@ const UPLOADS_DIR = env.VERCEL
   : path.resolve(__dirname, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-// ---------------------------------------------------------------- helpers
 const newId = (prefix) => `${prefix}_${Date.now()}${Math.random().toString(36).slice(2, 7)}`;
 const avatar = (name) => `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`;
 const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
-const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next); // async error catcher
+const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 const cookieBase = { httpOnly: true, secure: isProd, sameSite: isProd ? 'none' : 'lax' };
 
-// Creates the session (cookie + token) and returns { user, token }
 const startSession = (res, user) => {
   const safeUser = { id: user.id, name: user.name, email: user.email, photoUrl: user.photoUrl };
   const token = jwt.sign(safeUser, JWT_SECRET, { expiresIn: '7d' });
@@ -50,7 +46,6 @@ const startSession = (res, user) => {
   return { user: safeUser, token };
 };
 
-// Reads the logged-in user from the cookie or the "Authorization: Bearer" header
 const readUser = (req) => {
   const header = req.headers.authorization || '';
   const token = req.cookies?.token || (header.startsWith('Bearer ') ? header.slice(7) : null);
@@ -68,7 +63,6 @@ const requireAuth = (req, res, next) => {
   next();
 };
 
-// Loads a studio and checks the user may modify it (owner or admin). Sends the error itself.
 const getEditableStudio = async (req, res) => {
   const studio = await db.collection('studios').findOne({ id: req.params.id });
   if (!studio) return void res.status(404).json({ error: 'Studio not found' });
@@ -78,11 +72,8 @@ const getEditableStudio = async (req, res) => {
   return studio;
 };
 
-// ---------------------------------------------------------------- app setup
 export const app = express();
 
-// Only these websites may call the API from a browser (same-site requests always work).
-// Hosting the frontend on another domain? Set CLIENT_URL to that address.
 const allowedOrigins = [
   env.CLIENT_URL,
   env.APP_URL,
@@ -94,7 +85,7 @@ const allowedOrigins = [
   .flatMap((s) => s.split(','))
   .map((s) => s.trim().replace(/\/$/, ''));
 
-app.use(h(async (_req, _res, next) => { await mongoReady; next(); })); // wait for MongoDB on cold start
+app.use(h(async (_req, _res, next) => { await mongoReady; next(); }));
 app.use(cors({ origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)), credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
@@ -102,7 +93,6 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-// ---------------------------------------------------------------- auth
 app.post('/api/auth/register', h(async (req, res) => {
   const { name, email, password, photoUrl } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password required' });
@@ -134,7 +124,6 @@ app.post('/api/auth/login', h(async (req, res) => {
   res.json({ ...startSession(res, user), message: 'Signed in successfully' });
 }));
 
-// Real Google sign-in: the Google access token is verified with Google (and must belong to OUR app)
 app.post('/api/auth/google', h(async (req, res) => {
   const clientId = env.GOOGLE_CLIENT_ID;
   if (!clientId) return res.status(503).json({ error: 'Google sign-in is not configured on the server' });
@@ -172,7 +161,55 @@ app.post('/api/auth/logout', (_req, res) => {
   res.json({ message: 'Signed out successfully' });
 });
 
-// ---------------------------------------------------------------- studios
+app.patch('/api/auth/profile', requireAuth, h(async (req, res) => {
+  const { name, photoUrl, currentPassword, newPassword } = req.body;
+
+  const user = await db.collection('users').findOne({ id: req.user.id });
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const updates = {};
+  if (name !== undefined) updates.name = String(name).trim();
+  if (photoUrl !== undefined) updates.photoUrl = String(photoUrl).trim();
+
+  if (newPassword && String(newPassword).trim() !== '') {
+    if (!currentPassword) {
+      return res.status(400).json({ error: 'Current password is required to set a new password' });
+    }
+
+    if (user.passwordHash) {
+      const isMatch = await bcrypt.compare(String(currentPassword), user.passwordHash);
+      if (!isMatch) {
+        return res.status(400).json({ error: 'Incorrect current password' });
+      }
+    }
+
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+
+    updates.passwordHash = await bcrypt.hash(String(newPassword), 10);
+  }
+
+  if (!Object.keys(updates).length) {
+    return res.status(400).json({ error: 'Nothing to update' });
+  }
+
+  await db.collection('users').updateOne(
+    { id: req.user.id },
+    { $set: updates }
+  );
+
+  const updatedUser = await db.collection('users').findOne({ id: req.user.id });
+  const sessionData = startSession(res, updatedUser);
+
+  res.json({
+    user: sessionData.user,
+    message: 'Profile and password updated successfully'
+  });
+}));
+
 const EDITABLE_FIELDS = [
   'title', 'category', 'hourlyRate', 'securityDeposit', 'capacity', 'location', 'address',
   'imageUrl', 'galleryImages', 'amenities', 'overview', 'dimensions', 'powerSupply', 'noiseIsolation',
@@ -235,7 +272,7 @@ app.post('/api/studios', requireAuth, h(async (req, res) => {
 
 app.put('/api/studios/:id', requireAuth, h(async (req, res) => {
   if (!(await getEditableStudio(req, res))) return;
-  const changes = pick(req.body, EDITABLE_FIELDS); // only these fields can be changed
+  const changes = pick(req.body, EDITABLE_FIELDS);
   if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });
   await db.collection('studios').updateOne({ id: req.params.id }, { $set: changes });
   const studio = await db.collection('studios').findOne({ id: req.params.id });
@@ -253,7 +290,6 @@ app.get('/api/my-listings', requireAuth, h(async (req, res) => {
   res.json({ listings, total: listings.length });
 }));
 
-// ---------------------------------------------------------------- bookings
 app.get('/api/my-bookings', requireAuth, h(async (req, res) => {
   const bookings = await db.collection('bookings').find({ userId: req.user.id }).toArray();
   res.json({ bookings, total: bookings.length });
@@ -302,7 +338,6 @@ app.patch('/api/bookings/:id/cancel', requireAuth, h(async (req, res) => {
   res.json({ booking: await db.collection('bookings').findOne(filter), message: 'Booking cancelled' });
 }));
 
-// ---------------------------------------------------------------- wishlist
 app.get('/api/wishlist', requireAuth, h(async (req, res) => {
   const items = await db.collection('wishlist').find({ userId: req.user.id }).toArray();
   const studioIds = items.map((i) => i.studioId);
@@ -321,7 +356,6 @@ app.post('/api/wishlist/toggle', requireAuth, h(async (req, res) => {
   res.json({ saved: true, message: 'Added to wishlist' });
 }));
 
-// ---------------------------------------------------------------- uploads (logged-in users only)
 app.post('/api/upload', requireAuth, h(async (req, res) => {
   const { dataUrl, filename } = req.body;
   const match = typeof dataUrl === 'string' && dataUrl.match(/^data:(image\/[a-zA-Z0-9+-]+);base64,(.+)$/);
@@ -359,7 +393,6 @@ app.delete('/api/upload/:filename', requireAuth, h(async (req, res) => {
   res.json({ success: true, message: `File ${name} deleted` });
 }));
 
-// ---------------------------------------------------------------- fallbacks
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use((err, _req, res, _next) => {
@@ -368,7 +401,6 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: status === 500 ? 'Something went wrong on the server' : 'Bad request' });
 });
 
-// Run standalone only when started directly (`node backend/index.js`), never on Vercel or via server.ts
 if (!env.VERCEL && !env.VITE_SERVER_ACTIVE && process.argv[1] && path.resolve(process.argv[1]) === __filename) {
   const port = Number(env.PORT) || 5000;
   app.listen(port, '0.0.0.0', () => console.log(`StudioSpace API running on http://localhost:${port}`));
