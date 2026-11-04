@@ -1,7 +1,5 @@
-/**
- * StudioSpace backend: Express API (auth, studios, bookings, wishlist, uploads).
- */
-import 'dotenv/config'; // keep first: loads .env before db.js reads it
+
+import 'dotenv/config'; 
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';

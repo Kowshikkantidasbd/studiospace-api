@@ -1,7 +1,4 @@
-/**
- * StudioSpace Backend Database Layer
- * Lightweight, persistent MongoDB-compatible database engine stored directly in backend/data/db.json.
- */
+
 
 import fs from 'fs';
 import path from 'path';
@@ -11,21 +8,19 @@ import { MongoClient, ObjectId, ServerApiVersion } from 'mongodb';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Database storage located inside backend/data/
+
 const SEED_DB_FILE = path.resolve(__dirname, 'data', 'db.json');
-// On Vercel the project folder is read-only, so the working copy lives in /tmp.
+
 export const BACKEND_DATA_DIR = process.env.VERCEL ? '/tmp/studiospace-data' : path.resolve(__dirname, 'data');
 export const BACKEND_DB_FILE = path.resolve(BACKEND_DATA_DIR, 'db.json');
 export const ROOT_DB_FILE = path.resolve(__dirname, '../../data/db.json');
 
-// Ensure database directory exists in backend
+
 if (!fs.existsSync(BACKEND_DATA_DIR)) {
   fs.mkdirSync(BACKEND_DATA_DIR, { recursive: true });
 }
 
-// ----------------------------------------------------------------------
-// Initial Seed Data
-// ----------------------------------------------------------------------
+
 export const SEED_STUDIOS = [
   {
     id: 'studio-1',
@@ -274,9 +269,7 @@ export const SEEDED_USERS = [
   },
 ];
 
-// ----------------------------------------------------------------------
-// MongoDB Native Client & Connection
-// ----------------------------------------------------------------------
+
 export const MONGODB_URI = process.env.MONGODB_URI || process.env.DATABASE_URL || '';
 
 export let client = null;
@@ -320,9 +313,7 @@ if (MONGODB_URI) {
   }
 }
 
-// ----------------------------------------------------------------------
-// Backend MongoDB-Compatible In-Memory & File-Backed Store
-// ----------------------------------------------------------------------
+
 export class BackendDatabase {
   constructor() {
     this.data = { users: [], studios: [], bookings: [], wishlist: [] };
@@ -331,18 +322,18 @@ export class BackendDatabase {
 
   init() {
     try {
-      // 1. Try reading from backend/data/db.json
+      
       if (fs.existsSync(BACKEND_DB_FILE)) {
         const raw = fs.readFileSync(BACKEND_DB_FILE, 'utf-8');
         this.data = JSON.parse(raw);
       } else if (process.env.VERCEL && fs.existsSync(SEED_DB_FILE)) {
         this.data = JSON.parse(fs.readFileSync(SEED_DB_FILE, 'utf-8'));
       } else if (fs.existsSync(ROOT_DB_FILE)) {
-        // 2. Migrate existing data from root /data/db.json into backend/data/db.json
+        
         const raw = fs.readFileSync(ROOT_DB_FILE, 'utf-8');
         this.data = JSON.parse(raw);
       } else {
-        // 3. Fallback to initial seeds
+        
         this.data = {
           users: SEEDED_USERS,
           studios: SEED_STUDIOS,
@@ -351,7 +342,7 @@ export class BackendDatabase {
         };
       }
 
-      // Ensure defaults & seed safety
+      
       if (!this.data.studios || this.data.studios.length === 0) {
         this.data.studios = SEED_STUDIOS;
       }
